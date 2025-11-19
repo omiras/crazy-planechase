@@ -9,10 +9,17 @@ URL="https://api.scryfall.com/cards/search?q=t:plane&unique=prints"
 # Inicializar archivo
 echo "[]" > $OUTPUT_FILE
 
+# Verificar que la API key de DeepL está configurada
+if [ -z "$DEEPL_API_KEY" ]; then
+  echo "Error: Variable de entorno DEEPL_API_KEY no establecida"
+  echo "Establécela con: export DEEPL_API_KEY='tu_clave_aqui'"
+  exit 1
+fi
+
 # Variable para paginación
 NEXT_PAGE="$URL"
 
-# Función para traducir texto a español usando LibreTranslate
+# Función para traducir texto a español usando DeepL
 translate_to_es() {
   local text="$1"
   if [ -z "$text" ] || [ "$text" = "null" ]; then
@@ -20,12 +27,35 @@ translate_to_es() {
     return
   fi
 
-  # Petición a LibreTranslate (instancia pública). Si falla, devuelve cadena vacía.
-  TRANSLATED=$(curl -s -X POST "https://libretranslate.com/translate" \
-    -H "Content-Type: application/json" \
-    -d "$(jq -n --arg q "$text" --arg source "en" --arg target "es" '{q:$q,source:$source,target:$target,format:"text"}')")
+  # Delay de 0.5 segundos para evitar rate limiting
+  sleep 0.5
 
-  echo "$TRANSLATED" | jq -r '.translatedText // ""' 2>/dev/null || echo ""
+  # Petición a DeepL API v2 con reintentos
+  local retry=0
+  local max_retries=3
+  
+  while [ $retry -lt $max_retries ]; do
+    TRANSLATED=$(curl -s -X POST "https://api-free.deepl.com/v2/translate" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: DeepL-Auth-Key $DEEPL_API_KEY" \
+      -d "$(jq -n --arg text "$text" '{text: [$text], target_lang: "ES"}')")
+
+    # Verificar si la respuesta contiene una traducción válida
+    RESULT=$(echo "$TRANSLATED" | jq -r '.translations[0].text // ""' 2>/dev/null)
+    
+    if [ ! -z "$RESULT" ]; then
+      echo "$RESULT"
+      return
+    fi
+    
+    retry=$((retry + 1))
+    if [ $retry -lt $max_retries ]; then
+      sleep 1
+    fi
+  done
+  
+  # Si todos los reintentos fallaron, devolver vacío
+  echo ""
 }
 
 # Mientras haya página siguiente
